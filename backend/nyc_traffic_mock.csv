@@ -1,0 +1,8 @@
+timestamp,sensor_id,location,speed_mph,status,alert
+2026-03-21T12:00:00Z,S-402,Broadway & 42nd St,25,Normal,
+2026-03-21T12:00:05Z,S-402,Broadway & 42nd St,15,Congested,
+2026-03-21T12:00:10Z,S-402,Broadway & 42nd St,0,Stopped,CRITICAL_ACCIDENT
+2026-03-21T12:00:15Z,S-402,Broadway & 42nd St,0,Stopped,CRITICAL_ACCIDENT
+2026-03-21T12:00:20Z,S-402,Broadway & 42nd St,0,Stopped,CRITICAL_ACCIDENT
+2026-03-21T12:00:25Z,S-402,Broadway & 42nd St,0,Stopped,CRITICAL_ACCIDENT
+2026-03-21T12:00:30Z,S-402,Broadway & 42nd St,0,Stopped,CRITICAL_ACCIDENT

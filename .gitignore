@@ -143,3 +143,14 @@ yolov8s.pt
 
 
 test
+
+ahmedabad_traffic_speed.csv
+nyc_traffic_speed.csv
+__pycache__/
+*.pyc
+.env
+venv/
+node_modules/
+.DS_Store
+.next/
+*.log

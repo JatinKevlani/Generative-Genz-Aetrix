@@ -202,6 +202,40 @@ async def analyze_signal_retiming(
 
     return _get_mock_signal_retiming(incident_type, severity)
 
+# ── Historical Traffic Data Tool ─────────────────────────────────────────────
+
+from langchain_core.tools import tool
+import duckdb
+import pandas as pd
+
+@tool
+def query_historical_traffic(road_name: str, zone: str | None = None) -> str:
+    """
+    Query the historical traffic speed dataset for Ahmedabad to get average speeds.
+    Use this tool when you need baseline historical traffic data for a road.
+    
+    Args:
+        road_name: The name or partial name of the road (e.g. 'SG Highway', 'Ashram Rd').
+        zone: Optional zone (e.g. 'West', 'East', 'North', 'South', 'Central', 'Expressway').
+    """
+    csv_path = os.path.join(os.path.dirname(__file__), "ahmedabad_traffic_speed.csv")
+    if not os.path.exists(csv_path):
+        return "Error: ahmedabad_traffic_speed.csv not found on the server."
+        
+    query = f"SELECT linkName, AVG(Speed) as avg_speed, MAX(Speed) as max_speed, MIN(Speed) as min_speed FROM read_csv_auto('{csv_path}') WHERE linkName ILIKE '%{road_name}%'"
+    if zone:
+        query += f" AND Borough = '{zone}'"
+    query += " GROUP BY linkName LIMIT 10"
+    
+    try:
+        res = duckdb.query(query).df()
+        if res.empty:
+            return f"No historical data found for '{road_name}'."
+        # Round the floats for cleaner output
+        res = res.round(2)
+        return res.to_string(index=False)
+    except Exception as e:
+        return f"Error querying dataset: {str(e)}"
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
 
@@ -251,9 +285,23 @@ async def generate_chat_reply(query: str, context: str, status: str = "") -> str
                 model=MODEL,
                 temperature=CHAT_TEMPERATURE,
             )
-            chain = CHAT_PROMPT | llm
-            response = chain.invoke({"context": context, "query": query})
-            return response.content
+            from langgraph.prebuilt import create_react_agent
+            from langchain_core.messages import SystemMessage, HumanMessage
+            
+            agent_executor = create_react_agent(llm, tools=[query_historical_traffic])
+            
+            system_msg = SystemMessage(content=(
+                f"You are an AI Traffic Incident Copilot for Ahmedabad, Gujarat, India. "
+                f"You assist traffic command officers. Current traffic context: {context}. "
+                "Provide brief, actionable intelligence consisting of signal re-timing, "
+                "diversions, or public alerts. Use Ahmedabad road names and km/h for speeds. "
+                "You have access to a tool for querying historical traffic data. Use it whenever "
+                "baseline measurements, past history, or speed comparisons are requested."
+            ))
+            user_msg = HumanMessage(content=query)
+            
+            response = agent_executor.invoke({"messages": [system_msg, user_msg]})
+            return response["messages"][-1].content
         except Exception as e:
             return f"[LLM Error]: {str(e)}"
 

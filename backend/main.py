@@ -1,4 +1,4 @@
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import pandas as pd
@@ -7,8 +7,12 @@ import time
 import os
 import networkx as nx
 import osmnx as ox
+import httpx
+from dotenv import load_dotenv
 
-from llm import analyze_signal_retiming, generate_chat_reply
+load_dotenv()
+
+from llm import analyze_incident as llm_analyze_incident, generate_chat_reply
 
 app = FastAPI(title="Traffic Incident Copilot API")
 
@@ -52,8 +56,25 @@ class SignalRetimingItem(BaseModel):
     rationale: str
 
 
+class DiversionRouteItem(BaseModel):
+    name: str
+    from_local: str
+    to_local: str
+    via_streets: list[str]
+    extra_travel_minutes: int
+    activate_step: int
+
+class PublicAlerts(BaseModel):
+    vms: str
+    radio: str
+    social: str
+
 class IncidentAnalysisResponse(BaseModel):
     signal_retiming: list[SignalRetimingItem]
+    diversion_routes: list[DiversionRouteItem]
+    public_alerts: PublicAlerts
+    incident_narrative: str
+    route_coordinates: list[list[float]] = []
 
 
 # ── Simulated State ──────────────────────────────────────────────────────────
@@ -151,8 +172,8 @@ def report_incident(report: IncidentReport):
 
 @app.post("/api/analyze-incident", response_model=IncidentAnalysisResponse)
 async def analyze_incident(req: IncidentAnalysisRequest):
-    """Analyze an incident and return signal re-timing recommendations."""
-    results = await analyze_signal_retiming(
+    """Analyze an incident and return complete incident intelligence."""
+    results = await llm_analyze_incident(
         lat=req.lat,
         lng=req.lng,
         incident_type=req.incident_type,
@@ -161,8 +182,31 @@ async def analyze_incident(req: IncidentAnalysisRequest):
         notes=req.notes,
         sensors=MOCK_SENSORS,
     )
+    # Compute diversion route coordinates using OSMnx
+    route_coords: list[list[float]] = []
+    graph = CLASS_STATE.get("graph")
+    if graph is not None:
+        try:
+            origin_node = ox.nearest_nodes(graph, req.lng, req.lat)
+            nodes = list(graph.nodes())
+            # Pick a destination node far from origin
+            dest_node = nodes[-1] if nodes[0] == origin_node else nodes[0]
+            route = nx.shortest_path(graph, origin_node, dest_node, weight="length")
+            route_coords = [
+                [graph.nodes[n]["y"], graph.nodes[n]["x"]] for n in route
+            ]
+        except Exception as e:
+            print(f"Route computation failed: {e}")
+            route_coords = CLASS_STATE.get("route", [])
+    else:
+        route_coords = CLASS_STATE.get("route", [])
+
     return IncidentAnalysisResponse(
-        signal_retiming=[SignalRetimingItem(**item) for item in results]
+        signal_retiming=[SignalRetimingItem(**item) for item in results.get("signal_retiming", [])],
+        diversion_routes=[DiversionRouteItem(**item) for item in results.get("diversion_routes", [])],
+        public_alerts=PublicAlerts(**results.get("public_alerts", {"vms": "", "radio": "", "social": ""})),
+        incident_narrative=results.get("incident_narrative", ""),
+        route_coordinates=route_coords,
     )
 
 
@@ -181,6 +225,37 @@ async def chat_endpoint(req: QueryRequest, background_tasks: BackgroundTasks):
 
     reply_text = await generate_chat_reply(req.query, context, status)
     return {"reply": reply_text}
+
+
+@app.post("/api/speech-to-text")
+async def speech_to_text(audio: UploadFile = File(...)):
+    """Transcribe audio using Deepgram API."""
+    deepgram_key = os.getenv("DEEPGRAM_API_KEY", "")
+    if not deepgram_key:
+        return {"transcript": "", "error": "DEEPGRAM_API_KEY not set"}
+
+    audio_bytes = await audio.read()
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true",
+                headers={
+                    "Authorization": f"Token {deepgram_key}",
+                    "Content-Type": audio.content_type or "audio/webm",
+                },
+                content=audio_bytes,
+                timeout=15.0,
+            )
+            data = resp.json()
+            transcript = (
+                data.get("results", {})
+                .get("channels", [{}])[0]
+                .get("alternatives", [{}])[0]
+                .get("transcript", "")
+            )
+            return {"transcript": transcript}
+    except Exception as e:
+        return {"transcript": "", "error": str(e)}
 
 
 if __name__ == "__main__":

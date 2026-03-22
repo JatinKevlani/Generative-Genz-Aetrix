@@ -2,9 +2,11 @@
 import dynamic from 'next/dynamic';
 import ChatComponent from '@/components/ChatComponent';
 import SignalRetimingPanel from '@/components/SignalRetimingPanel';
+import DiversionRoutesPanel from '@/components/DiversionRoutesPanel';
+import PublicAlertsPanel from '@/components/PublicAlertsPanel';
 import { useEffect, useState, useCallback } from 'react';
 import { AlertTriangle, MapPin, Send, ChevronDown } from 'lucide-react';
-import type { SignalRetiming, Incident, IncidentAnalysisResponse } from '@/types';
+import type { SignalRetiming, DiversionRouteItem, PublicAlerts, Incident, IncidentAnalysisResponse } from '@/types';
 
 const MapComponent = dynamic(() => import('@/components/MapComponent'), {
   ssr: false,
@@ -28,7 +30,11 @@ export default function Dashboard() {
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [signalRetiming, setSignalRetiming] = useState<SignalRetiming[]>([]);
+  const [diversionRoutesData, setDiversionRoutesData] = useState<DiversionRouteItem[]>([]);
+  const [publicAlerts, setPublicAlerts] = useState<PublicAlerts | null>(null);
+  const [incidentNarrative, setIncidentNarrative] = useState('');
   const [analyzing, setAnalyzing] = useState(false);
+  const [activeIntelTab, setActiveIntelTab] = useState<'signals' | 'diversions' | 'alerts'>('signals');
 
   // Incident form state
   const [formType, setFormType] = useState(INCIDENT_TYPES[0]);
@@ -48,12 +54,12 @@ export default function Dashboard() {
         },
         () => {
           // Default to NYC if denied
-          setUserLocation({ lat: 40.7128, lng: -74.006 });
+          setUserLocation({ lat: 23.0225, lng: 72.5714 });
         },
         { enableHighAccuracy: true, timeout: 10000 }
       );
     } else {
-      setUserLocation({ lat: 40.7128, lng: -74.006 });
+      setUserLocation({ lat: 23.0225, lng: 72.5714 });
     }
   }, []);
 
@@ -123,6 +129,13 @@ export default function Dashboard() {
       });
       const analysisData: IncidentAnalysisResponse = await analysisRes.json();
       setSignalRetiming(analysisData.signal_retiming || []);
+      setDiversionRoutesData(analysisData.diversion_routes || []);
+      setPublicAlerts(analysisData.public_alerts || null);
+      setIncidentNarrative(analysisData.incident_narrative || '');
+      // Set computed route coordinates for the map polyline
+      if (analysisData.route_coordinates && analysisData.route_coordinates.length > 0) {
+        setDiversionRoute(analysisData.route_coordinates);
+      }
     } catch (err) {
       console.error('Incident analysis failed', err);
     } finally {
@@ -241,10 +254,14 @@ export default function Dashboard() {
                     setIncidents([]);
                     setIncidentActive(false);
                     setSignalRetiming([]);
+                    setDiversionRoutesData([]);
+                    setPublicAlerts(null);
+                    setIncidentNarrative('');
                     setAnalyzing(false);
                     setFormNotes('');
                     setFormSeverity(3);
                     setFormType(INCIDENT_TYPES[0]);
+                    setActiveIntelTab('signals');
                   }}
                   disabled={incidents.length === 0}
                   className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
@@ -255,11 +272,12 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Intelligence Stream with Incidents */}
+          {/* Intel Stream with Tabs */}
           <div className="flex-1 bg-slate-900 p-4 rounded-xl shadow-lg border border-slate-800 overflow-y-auto">
             <h2 className="text-lg font-semibold mb-2 text-slate-50">Intelligence Stream</h2>
-            <div className="text-sm space-y-3">
-              {/* Show reported incidents */}
+
+            {/* Reported incidents list */}
+            <div className="text-sm space-y-3 mb-3">
               {incidents.map((inc, i) => (
                 <div
                   key={i}
@@ -272,7 +290,7 @@ export default function Dashboard() {
                     </span>
                   </div>
                   <div className="text-xs opacity-80">
-                    Severity {inc.severity}/5 — {severityLabel(inc.severity)} 
+                    Severity {inc.severity}/5 — {severityLabel(inc.severity)}
                     {' • '}
                     {inc.lat.toFixed(4)}, {inc.lng.toFixed(4)}
                   </div>
@@ -281,29 +299,72 @@ export default function Dashboard() {
                   )}
                 </div>
               ))}
+            </div>
 
-              {/* Signal Re-Timing Panel */}
-              <SignalRetimingPanel
-                signalRetiming={signalRetiming}
-                loading={analyzing}
-              />
+            {/* Tab navigation */}
+            <div className="flex gap-1 mb-3 bg-slate-800/50 p-1 rounded-lg">
+              {[
+                { id: 'signals' as const, label: '🔴 Signals', count: signalRetiming.length },
+                { id: 'diversions' as const, label: '🔵 Diversions', count: diversionRoutesData.length },
+                { id: 'alerts' as const, label: '📢 Alerts', count: publicAlerts ? 3 : 0 },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveIntelTab(tab.id)}
+                  className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-150 ${
+                    activeIntelTab === tab.id
+                      ? 'bg-slate-700 text-slate-100 shadow-sm'
+                      : 'text-slate-400 hover:text-slate-300 hover:bg-slate-700/50'
+                  }`}
+                >
+                  {tab.label}
+                  {tab.count > 0 && (
+                    <span className="ml-1 text-[9px] bg-slate-600 px-1.5 py-0.5 rounded-full">
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
 
-              {/* Backend-detected incidents */}
-              {incidentActive && incidents.length === 0 && (
-                <>
-                  <div className="p-2 bg-red-500/10 border border-red-500/20 rounded text-red-500">
-                    CRITICAL ACCIDENT detected at {trafficData?.location}. Speeds dropped to 0 mph.
-                  </div>
-                  <div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-yellow-600 dark:text-yellow-400">
-                    A* Routing Algorithm identified diversion route. Processing LLM recommendations.
-                  </div>
-                </>
+            {/* Tab content */}
+            <div className="text-sm space-y-3">
+              {activeIntelTab === 'signals' && (
+                <SignalRetimingPanel
+                  signalRetiming={signalRetiming}
+                  loading={analyzing}
+                />
               )}
-
-              {!incidentActive && incidents.length === 0 && (
-                <div className="text-slate-400">Monitoring traffic patterns...</div>
+              {activeIntelTab === 'diversions' && (
+                <DiversionRoutesPanel
+                  routes={diversionRoutesData}
+                  loading={analyzing}
+                />
+              )}
+              {activeIntelTab === 'alerts' && (
+                <PublicAlertsPanel
+                  alerts={publicAlerts}
+                  loading={analyzing}
+                  incidentNarrative={incidentNarrative}
+                />
               )}
             </div>
+
+            {/* Backend-detected incidents */}
+            {incidentActive && incidents.length === 0 && (
+              <div className="mt-3 space-y-2">
+                <div className="p-2 bg-red-500/10 border border-red-500/20 rounded text-red-500 text-sm">
+                  CRITICAL ACCIDENT detected at {trafficData?.location}. Speeds dropped to 0 mph.
+                </div>
+                <div className="p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-yellow-600 dark:text-yellow-400 text-sm">
+                  A* Routing Algorithm identified diversion route. Processing LLM recommendations.
+                </div>
+              </div>
+            )}
+
+            {!incidentActive && incidents.length === 0 && (
+              <div className="text-sm text-slate-400">Monitoring traffic patterns...</div>
+            )}
           </div>
         </div>
 
@@ -312,6 +373,7 @@ export default function Dashboard() {
           <MapComponent
             userLocation={userLocation}
             incidents={incidents}
+            diversionRoute={diversionRoute}
           />
         </div>
 

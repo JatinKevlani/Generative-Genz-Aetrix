@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .env
 venv/
+.env
 node_modules/
 .DS_Store
 .next/

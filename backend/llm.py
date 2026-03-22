@@ -25,17 +25,17 @@ CHAT_TEMPERATURE = 0.0
 
 # ── Prompt Templates ────────────────────────────────────────────────────────
 
-SIGNAL_RETIMING_PROMPT = ChatPromptTemplate.from_messages([
+INCIDENT_ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
     (
         "system",
         "You are an AI Traffic Incident Copilot embedded in Ahmedabad's Integrated Traffic Management Centre (ITMC).\n"
-        "Your task is to generate signal re-timing recommendations for intersections near an incident in Ahmedabad, Gujarat, India.\n\n"
+        "Your task is to analyze traffic incidents in Ahmedabad, Gujarat, India, and generate actionable intelligence.\n\n"
         "Rules:\n"
-        "1. Name SPECIFIC intersections using real Ahmedabad road and cross-road names (e.g., SG Highway & Iskcon Cross Roads).\n"
-        "2. Provide exact green phase durations in seconds (current and recommended).\n"
+        "1. Name SPECIFIC intersections and roads using real Ahmedabad names (e.g., SG Highway, Ashram Road).\n"
+        "2. Provide exact green phase duration changes in seconds.\n"
         "3. Be decisive — use command language.\n"
         "4. Calibrate urgency to severity (5 = critical/terse, 1 = measured/thorough).\n"
-        "5. Return 3-5 intersection recommendations.\n\n"
+        "5. Return 3-5 intersection recommendations, and 1-2 diversion routes.\n\n"
         "Current sensor readings:\n{sensor_context}\n\n"
         "Respond ONLY with valid JSON matching this schema — no preamble:\n"
         '{{\n'
@@ -46,7 +46,23 @@ SIGNAL_RETIMING_PROMPT = ChatPromptTemplate.from_messages([
         '      "recommended_green_seconds": integer,\n'
         '      "rationale": "one sentence"\n'
         '    }}\n'
-        '  ]\n'
+        '  ],\n'
+        '  "diversion_routes": [\n'
+        '    {{\n'
+        '      "name": "route label",\n'
+        '      "from_local": "string",\n'
+        '      "to_local": "string",\n'
+        '      "via_streets": ["string"],\n'
+        '      "extra_travel_minutes": integer,\n'
+        '      "activate_step": integer\n'
+        '    }}\n'
+        '  ],\n'
+        '  "public_alerts": {{\n'
+        '    "vms": "≤3 lines, ≤60 chars each, use \\n",\n'
+        '    "radio": "~100 words",\n'
+        '    "social": "≤280 chars"\n'
+        '  }},\n'
+        '  "incident_narrative": "100-150 words plain English briefing summary"\n'
         '}}'
     ),
     (
@@ -57,7 +73,7 @@ SIGNAL_RETIMING_PROMPT = ChatPromptTemplate.from_messages([
         "Location: {lat}, {lng}\n"
         "Lanes Blocked: {lanes_blocked}\n"
         "Notes: {notes}\n\n"
-        "Generate signal re-timing recommendations for the nearest affected intersections."
+        "Generate full incident analysis and recommendations."
     ),
 ])
 
@@ -92,14 +108,14 @@ def _strip_markdown_fences(text: str) -> str:
 
 # ── Signal Re-Timing ────────────────────────────────────────────────────────
 
-def _get_mock_signal_retiming(
+def _get_mock_incident_analysis(
     incident_type: str,
     severity: int,
-) -> list[dict]:
-    """Return realistic mock signal re-timing data scaled by severity."""
+) -> dict:
+    """Return realistic mock full incident analysis scaled by severity."""
     severity_multiplier = severity / 3.0
 
-    base = [
+    signal_retiming = [
         {
             "intersection": "SG Highway & Iskcon Cross Roads",
             "current_green_seconds": 45,
@@ -127,30 +143,42 @@ def _get_mock_signal_retiming(
                 "Significantly extend green phase."
             ),
         },
-        {
-            "intersection": "132 Ft Ring Road & Shivranjani Cross Roads",
-            "current_green_seconds": 50,
-            "recommended_green_seconds": max(30, 50 - int(10 * severity_multiplier)),
-            "rationale": (
-                "Reduce green to discourage through-traffic "
-                "toward the blocked incident zone on Ring Road."
-            ),
-        },
-        {
-            "intersection": "Drive-In Road & Gurukul Cross Roads",
-            "current_green_seconds": 42,
-            "recommended_green_seconds": 42 + int(8 * severity_multiplier),
-            "rationale": (
-                "Upstream intersection. Moderate increase to prevent "
-                "queue spillback onto Gurukul and Memnagar roads."
-            ),
-        },
     ]
+    
+    diversion_routes = [
+        {
+            "name": "Primary Diversion via CG Road",
+            "from_local": "Navrangpura",
+            "to_local": "Paldi",
+            "via_streets": ["CG Road", "Parimal Garden", "Paldi Cross Roads"],
+            "extra_travel_minutes": 12,
+            "activate_step": 1
+        },
+        {
+            "name": "Secondary Diversion via 132 Ft Ring Road",
+            "from_local": "Vastrapur",
+            "to_local": "Shyamal",
+            "via_streets": ["IIM Road", "132 Ft Ring Road"],
+            "extra_travel_minutes": 18,
+            "activate_step": 2
+        }
+    ]
+    
+    public_alerts = {
+        "vms": f"{incident_type.upper()} AT SG HIGHWAY\nHEAVY DELAYS EXPECTED\nUSE CG ROAD OR RING ROAD",
+        "radio": f"Attention Ahmedabad motorists. A severe {incident_type.lower()} has been reported on the SG Highway near Iskcon Cross Roads causing major delays of up to 45 minutes. Emergency services are en route. Local authorities strongly urge all commuters to divert through CG Road or the 132 Ft Ring Road towards Shyamal. Please avoid the area until further notice, and stay tuned for updates.",
+        "social": f"🚨 TRAFFIC ALERT 🚨 A {incident_type.lower()} has occurred on SG Highway at Iskcon Cross Roads. Expect heavy congestion. Please find alternate routes via CG Road. 🚗 #AhmedabadTraffic #AHMUpdates"
+    }
 
-    return base[: 3 + min(severity, 2)]
+    return {
+        "signal_retiming": signal_retiming,
+        "diversion_routes": diversion_routes,
+        "public_alerts": public_alerts,
+        "incident_narrative": f"A severity {severity} {incident_type.lower()} has resulted in severe queue spillbacks down the SG Highway. Multiple lanes are blocked, directly disrupting the primary north-south artery. Traffic control is advised to rapidly flush secondary parallel routes like CG Road and implement immediate diversion warnings."
+    }
 
 
-async def analyze_signal_retiming(
+async def analyze_incident(
     *,
     lat: float,
     lng: float,
@@ -159,15 +187,14 @@ async def analyze_signal_retiming(
     lanes_blocked: int,
     notes: str,
     sensors: list[dict],
-) -> list[dict]:
+) -> dict:
     """
-    Generate signal re-timing recommendations via LLM.
+    Generate complete incident intelligence via LLM.
 
     Falls back to mock data if no API key is set or the LLM call fails.
 
     Returns:
-        List of dicts with keys: intersection, current_green_seconds,
-        recommended_green_seconds, rationale.
+        Dict mapped to the full incident intelligence schema.
     """
     api_key = _get_api_key()
 
@@ -183,7 +210,7 @@ async def analyze_signal_retiming(
                 temperature=ANALYSIS_TEMPERATURE,
                 api_key=api_key,
             )
-            chain = SIGNAL_RETIMING_PROMPT | llm
+            chain = INCIDENT_ANALYSIS_PROMPT | llm
             response = chain.invoke({
                 "sensor_context": sensor_context,
                 "incident_type": incident_type,
@@ -195,12 +222,12 @@ async def analyze_signal_retiming(
             })
 
             data = json.loads(_strip_markdown_fences(response.content))
-            return data.get("signal_retiming", [])
+            return data
 
         except Exception as e:
             print(f"LLM analysis failed, falling back to mock: {e}")
 
-    return _get_mock_signal_retiming(incident_type, severity)
+    return _get_mock_incident_analysis(incident_type, severity)
 
 # ── Historical Traffic Data Tool ─────────────────────────────────────────────
 

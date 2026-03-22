@@ -1,0 +1,7 @@
+ahmedabad_traffic_speed.csv
+__pycache__/
+*.pyc
+.env
+venv/
+node_modules/
+.DS_Store
